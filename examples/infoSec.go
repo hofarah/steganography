@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/md5"
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/hex"
 	"flag"
 	"fmt"
@@ -11,7 +13,6 @@ import (
 	"image/png"
 	"log"
 	"os"
-	"strings"
 )
 
 var inputPath, outputPath string
@@ -24,17 +25,21 @@ func main() {
 	fmt.Println("enter a text to encrypt into image")
 	buff := bufio.NewReader(os.Stdin)
 	data, _ := buff.ReadString('\n')
-	key := "123lksd#4flksjdf"
-	cipher, _ := steganography.Encrypt(key, data)
+	data = data[:len(data)-1]
+	destPrivate, _ := rsa.GenerateKey(rand.Reader, 1024)
+	destPublicKey := destPrivate.PublicKey
+	cipher, _ := rsa.EncryptPKCS1v15(rand.Reader, &destPublicKey, []byte(data))
 	h := md5.New()
-	h.Write([]byte(cipher))
+	h.Write(cipher)
 	hashed := hex.EncodeToString(h.Sum(nil))
-	cipher += hashed
+	cipherHash, _ := rsa.EncryptPKCS1v15(rand.Reader, &destPublicKey, []byte(hashed))
+	cipher = append([]byte{byte(len(cipher))}, cipher...)
+	cipher = append(cipher, cipherHash...)
 	inFile, _ := os.Open(inputPath)
 	reader := bufio.NewReader(inFile)
 	img, _ := png.Decode(reader)
 	w := new(bytes.Buffer)
-	err := steganography.Encode(w, img, []byte(cipher))
+	err := steganography.Encode(w, img, cipher)
 	if err != nil {
 		log.Printf("Error Encoding file %v", err)
 		panic(err)
@@ -51,6 +56,17 @@ func main() {
 	sizeOfMessage := steganography.GetMessageSizeFromImage(img)
 
 	msg := steganography.Decode(sizeOfMessage, img)
-	data, _ = steganography.Decrypt(key, strings.ReplaceAll(string(msg), hashed, ""))
-	fmt.Println("after decrypt image data: ", data)
+	mainCipher := msg[1 : msg[0]+1]
+	newData, _ := destPrivate.Decrypt(rand.Reader, mainCipher, nil)
+	cipherNewHash := msg[msg[0]+1:]
+	newHash, _ := destPrivate.Decrypt(rand.Reader, cipherNewHash, nil)
+	h2 := md5.New()
+	h2.Write(mainCipher)
+	hashGenerated := hex.EncodeToString(h2.Sum(nil))
+	//check hash
+	if hashGenerated != string(newHash) {
+		fmt.Println("invalid hash")
+	}
+
+	fmt.Println("after decrypt image data: ", string(newData))
 }
